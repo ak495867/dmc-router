@@ -1,0 +1,580 @@
+struct Route {
+    method: string,
+    pattern: string,
+    handler_id: int
+}
+
+struct Request {
+    method: string,
+    path: string,
+    query: string,
+    body: string,
+    headers: string,
+    params: string
+}
+
+struct Response {
+    status: int,
+    content_type: string,
+    headers: string,
+    body: string
+}
+
+struct Router {
+    routes: [Route; 64],
+    route_count: int,
+    cors_enabled: int,
+    cors_origin: string,
+    cors_methods: string,
+    cors_headers: string,
+    auth_enabled: int,
+    auth_header: string,
+    auth_token: string,
+    logging_enabled: int,
+    log_buffer: string,
+    log_count: int
+}
+
+fn route_new(method: string, pattern: string, handler_id: int) -> Route {
+    let r: Route = Route {
+        method: method,
+        pattern: pattern,
+        handler_id: handler_id
+    };
+    return r;
+}
+
+fn request_new(method: string, raw_path: string, body: string, headers: string) -> Request {
+    var p: string = raw_path;
+    var q: string = "";
+    let qpos: int = text_find(raw_path, "?");
+    if (qpos >= 0) {
+        p = string_slice(raw_path, 0, qpos);
+        q = string_slice(raw_path, qpos + 1, text_len(raw_path) - qpos - 1);
+    }
+    let req: Request = Request {
+        method: method,
+        path: p,
+        query: q,
+        body: body,
+        headers: headers,
+        params: ""
+    };
+    return req;
+}
+
+fn response_new(status: int, content_type: string, body: string) -> Response {
+    let res: Response = Response {
+        status: status,
+        content_type: content_type,
+        headers: "",
+        body: body
+    };
+    return res;
+}
+
+fn response_with_header(res: Response, key: string, val: string) -> Response {
+    var r: Response = res;
+    r.headers = r.headers + key + ": " + val + "\r\n";
+    return r;
+}
+
+fn router_status_message(code: int) -> string {
+    if (code == 200) { return "OK"; }
+    if (code == 201) { return "Created"; }
+    if (code == 204) { return "No Content"; }
+    if (code == 301) { return "Moved Permanently"; }
+    if (code == 302) { return "Found"; }
+    if (code == 400) { return "Bad Request"; }
+    if (code == 401) { return "Unauthorized"; }
+    if (code == 403) { return "Forbidden"; }
+    if (code == 404) { return "Not Found"; }
+    if (code == 405) { return "Method Not Allowed"; }
+    if (code == 500) { return "Internal Server Error"; }
+    return "Unknown";
+}
+
+fn response_status(status: int) -> Response {
+    return response_new(status, "text/plain", router_status_message(status));
+}
+
+fn response_ok(body: string) -> Response {
+    return response_new(200, "text/plain", body);
+}
+
+fn response_created(body: string) -> Response {
+    return response_new(201, "application/json", body);
+}
+
+fn response_no_content() -> Response {
+    return response_new(204, "text/plain", "");
+}
+
+fn response_json(status: int, json_body: string) -> Response {
+    return response_new(status, "application/json", json_body);
+}
+
+fn response_text(status: int, text_body: string) -> Response {
+    return response_new(status, "text/plain", text_body);
+}
+
+fn response_html(status: int, html_body: string) -> Response {
+    return response_new(status, "text/html", html_body);
+}
+
+fn response_bad_request(msg: string) -> Response {
+    let body: string = "{\"error\":\"Bad Request\",\"message\":\"" + msg + "\"}";
+    return response_new(400, "application/json", body);
+}
+
+fn response_unauthorized(msg: string) -> Response {
+    let body: string = "{\"error\":\"Unauthorized\",\"message\":\"" + msg + "\"}";
+    return response_new(401, "application/json", body);
+}
+
+fn response_forbidden(msg: string) -> Response {
+    let body: string = "{\"error\":\"Forbidden\",\"message\":\"" + msg + "\"}";
+    return response_new(403, "application/json", body);
+}
+
+fn response_not_found(msg: string) -> Response {
+    let body: string = "{\"error\":\"Not Found\",\"message\":\"" + msg + "\"}";
+    return response_new(404, "application/json", body);
+}
+
+fn response_method_not_allowed() -> Response {
+    let body: string = "{\"error\":\"Method Not Allowed\",\"message\":\"HTTP method not supported for route\"}";
+    return response_new(405, "application/json", body);
+}
+
+fn response_internal_error(msg: string) -> Response {
+    let body: string = "{\"error\":\"Internal Server Error\",\"message\":\"" + msg + "\"}";
+    return response_new(500, "application/json", body);
+}
+
+fn response_serialize(res: Response) -> string {
+    let status_str: string = text_from_int(res.status);
+    let msg: string = router_status_message(res.status);
+    let body_len: int = text_len(res.body);
+    let len_str: string = text_from_int(body_len);
+    var wire: string = "HTTP/1.1 " + status_str + " " + msg + "\r\n";
+    wire = wire + "Content-Type: " + res.content_type + "\r\n";
+    wire = wire + "Content-Length: " + len_str + "\r\n";
+    wire = wire + "Connection: close\r\n";
+    if (text_len(res.headers) > 0) {
+        wire = wire + res.headers;
+    }
+    wire = wire + "\r\n" + res.body;
+    return wire;
+}
+
+fn router_json_status(status: int, ok: int, message: string) -> string {
+    let s_str: string = text_from_int(status);
+    var ok_str: string = "false";
+    if (ok != 0) {
+        ok_str = "true";
+    }
+    return "{\"status\":" + s_str + ",\"ok\":" + ok_str + ",\"message\":\"" + message + "\"}";
+}
+
+fn router_json_obj(key: string, val: string) -> string {
+    return "{\"" + key + "\":\"" + val + "\"}";
+}
+
+fn router_json_obj2(k1: string, v1: string, k2: string, v2: string) -> string {
+    return "{\"" + k1 + "\":\"" + v1 + "\",\"" + k2 + "\":\"" + v2 + "\"}";
+}
+
+fn router_json_obj3(k1: string, v1: string, k2: string, v2: string, k3: string, v3: string) -> string {
+    return "{\"" + k1 + "\":\"" + v1 + "\",\"" + k2 + "\":\"" + v2 + "\",\"" + k3 + "\":\"" + v3 + "\"}";
+}
+
+fn router_parse_query(query_str: string) -> string {
+    let len: int = text_len(query_str);
+    if (len == 0) {
+        return "";
+    }
+    if (text_char_at(query_str, 0) == 63) {
+        return string_slice(query_str, 1, len - 1);
+    }
+    return query_str;
+}
+
+fn router_query_get(query_str: string, key: string) -> string {
+    let clean_query: string = router_parse_query(query_str);
+    let qlen: int = text_len(clean_query);
+    let klen: int = text_len(key);
+    if (qlen == 0 || klen == 0) {
+        return "";
+    }
+    var i: int = 0;
+    while (i < qlen) {
+        var next_amp: int = qlen;
+        var j: int = i;
+        while (j < qlen) {
+            if (text_char_at(clean_query, j) == 38) {
+                next_amp = j;
+                break;
+            }
+            j = j + 1;
+        }
+        let pair: string = string_slice(clean_query, i, next_amp - i);
+        let eq_pos: int = text_find(pair, "=");
+        if (eq_pos >= 0) {
+            let k: string = string_slice(pair, 0, eq_pos);
+            if (text_cmp(k, key) == 0) {
+                let v: string = string_slice(pair, eq_pos + 1, text_len(pair) - eq_pos - 1);
+                return v;
+            }
+        } else {
+            if (text_cmp(pair, key) == 0) {
+                return "";
+            }
+        }
+        i = next_amp + 1;
+    }
+    return "";
+}
+
+fn request_get_query(req: Request, key: string) -> string {
+    return router_query_get(req.query, key);
+}
+
+fn router_param_get(params: string, key: string) -> string {
+    let plen: int = text_len(params);
+    let klen: int = text_len(key);
+    if (plen == 0 || klen == 0) {
+        return "";
+    }
+    var i: int = 0;
+    while (i < plen) {
+        var next_sep: int = plen;
+        var j: int = i;
+        while (j < plen) {
+            let c: int = text_char_at(params, j);
+            if (c == 38 || c == 59) {
+                next_sep = j;
+                break;
+            }
+            j = j + 1;
+        }
+        let pair: string = string_slice(params, i, next_sep - i);
+        let eq_pos: int = text_find(pair, "=");
+        if (eq_pos >= 0) {
+            let k: string = string_slice(pair, 0, eq_pos);
+            if (text_cmp(k, key) == 0) {
+                let v: string = string_slice(pair, eq_pos + 1, text_len(pair) - eq_pos - 1);
+                return v;
+            }
+        }
+        i = next_sep + 1;
+    }
+    return "";
+}
+
+fn request_get_param(req: Request, key: string) -> string {
+    return router_param_get(req.params, key);
+}
+
+fn request_set_param(req: *Request, key: string, val: string) {
+    if (text_len(req.params) > 0) {
+        req.params = req.params + "&";
+    }
+    req.params = req.params + key + "=" + val;
+}
+
+fn request_get_header(req: Request, key: string) -> string {
+    let h: string = req.headers;
+    let hlen: int = text_len(h);
+    let klen: int = text_len(key);
+    if (hlen == 0 || klen == 0) {
+        return "";
+    }
+    var i: int = 0;
+    while (i < hlen) {
+        var next_nl: int = hlen;
+        var j: int = i;
+        while (j < hlen) {
+            let c: int = text_char_at(h, j);
+            if (c == 10 || c == 13 || c == 59) {
+                next_nl = j;
+                break;
+            }
+            j = j + 1;
+        }
+        let line: string = string_slice(h, i, next_nl - i);
+        let colon_pos: int = text_find(line, ":");
+        if (colon_pos >= 0) {
+            let name_sub: string = string_slice(line, 0, colon_pos);
+            var trim_start: int = 0;
+            let nlen: int = text_len(name_sub);
+            while (trim_start < nlen && (text_char_at(name_sub, trim_start) == 32 || text_char_at(name_sub, trim_start) == 9)) {
+                trim_start = trim_start + 1;
+            }
+            var trim_end: int = nlen - 1;
+            while (trim_end > trim_start && (text_char_at(name_sub, trim_end) == 32 || text_char_at(name_sub, trim_end) == 9)) {
+                trim_end = trim_end - 1;
+            }
+            let k: string = string_slice(name_sub, trim_start, trim_end - trim_start + 1);
+            if (text_cmp(text_lower(k), text_lower(key)) == 0) {
+                let val_sub: string = string_slice(line, colon_pos + 1, text_len(line) - colon_pos - 1);
+                var v_start: int = 0;
+                let vlen: int = text_len(val_sub);
+                while (v_start < vlen && (text_char_at(val_sub, v_start) == 32 || text_char_at(val_sub, v_start) == 9)) {
+                    v_start = v_start + 1;
+                }
+                var v_end: int = vlen - 1;
+                while (v_end > v_start && (text_char_at(val_sub, v_end) == 32 || text_char_at(val_sub, v_end) == 9)) {
+                    v_end = v_end - 1;
+                }
+                if (v_start < vlen) {
+                    return string_slice(val_sub, v_start, v_end - v_start + 1);
+                }
+                return "";
+            }
+        }
+        i = next_nl + 1;
+    }
+    return "";
+}
+
+fn router_match_path(pattern: string, path: string, out_params: *string) -> int {
+    var clean_path: string = path;
+    let qpos: int = text_find(clean_path, "?");
+    if (qpos >= 0) {
+        clean_path = string_slice(clean_path, 0, qpos);
+    }
+    let pat_len: int = text_len(pattern);
+    let path_len: int = text_len(clean_path);
+    if (pat_len == 0 && path_len == 0) {
+        return 1;
+    }
+    if (text_cmp(pattern, clean_path) == 0) {
+        return 1;
+    }
+    var pat_pos: int = 0;
+    var path_pos: int = 0;
+    var params_acc: string = "";
+    while (pat_pos < pat_len || path_pos < path_len) {
+        while (pat_pos < pat_len && text_char_at(pattern, pat_pos) == 47) {
+            pat_pos = pat_pos + 1;
+        }
+        while (path_pos < path_len && text_char_at(clean_path, path_pos) == 47) {
+            path_pos = path_pos + 1;
+        }
+        if (pat_pos == pat_len && path_pos == path_len) {
+            *out_params = params_acc;
+            return 1;
+        }
+        if (pat_pos == pat_len || path_pos == path_len) {
+            return 0;
+        }
+        var pat_end: int = pat_pos;
+        while (pat_end < pat_len && text_char_at(pattern, pat_end) != 47) {
+            pat_end = pat_end + 1;
+        }
+        let pat_seg: string = string_slice(pattern, pat_pos, pat_end - pat_pos);
+        pat_pos = pat_end;
+
+        var path_end: int = path_pos;
+        while (path_end < path_len && text_char_at(clean_path, path_end) != 47) {
+            path_end = path_end + 1;
+        }
+        let path_seg: string = string_slice(clean_path, path_pos, path_end - path_pos);
+        path_pos = path_end;
+
+        let seg_len: int = text_len(pat_seg);
+        if (seg_len > 1 && text_char_at(pat_seg, 0) == 58) {
+            let param_name: string = string_slice(pat_seg, 1, seg_len - 1);
+            if (text_len(params_acc) > 0) {
+                params_acc = params_acc + "&";
+            }
+            params_acc = params_acc + param_name + "=" + path_seg;
+        } else if (text_cmp(pat_seg, "*") == 0) {
+            if (text_len(params_acc) > 0) {
+                params_acc = params_acc + "&";
+            }
+            params_acc = params_acc + "wildcard=" + path_seg;
+        } else {
+            if (text_cmp(pat_seg, path_seg) != 0) {
+                return 0;
+            }
+        }
+    }
+    *out_params = params_acc;
+    return 1;
+}
+
+fn router_new() -> Router {
+    let empty_route: Route = route_new("", "", 0);
+    let r: Router = Router {
+        routes: [
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route,
+            empty_route, empty_route, empty_route, empty_route
+        ],
+        route_count: 0,
+        cors_enabled: 0,
+        cors_origin: "",
+        cors_methods: "",
+        cors_headers: "",
+        auth_enabled: 0,
+        auth_header: "",
+        auth_token: "",
+        logging_enabled: 0,
+        log_buffer: "",
+        log_count: 0
+    };
+    return r;
+}
+
+fn router_add_route(r: *Router, method: string, pattern: string, handler_id: int) -> int {
+    if (r.route_count >= 64) {
+        return 0;
+    }
+    let idx: int = r.route_count;
+    r.routes[idx] = route_new(method, pattern, handler_id);
+    r.route_count = r.route_count + 1;
+    return r.route_count;
+}
+
+fn router_get(r: *Router, pattern: string, handler_id: int) -> int {
+    return router_add_route(r, "GET", pattern, handler_id);
+}
+
+fn router_post(r: *Router, pattern: string, handler_id: int) -> int {
+    return router_add_route(r, "POST", pattern, handler_id);
+}
+
+fn router_put(r: *Router, pattern: string, handler_id: int) -> int {
+    return router_add_route(r, "PUT", pattern, handler_id);
+}
+
+fn router_delete(r: *Router, pattern: string, handler_id: int) -> int {
+    return router_add_route(r, "DELETE", pattern, handler_id);
+}
+
+fn router_patch(r: *Router, pattern: string, handler_id: int) -> int {
+    return router_add_route(r, "PATCH", pattern, handler_id);
+}
+
+fn router_options(r: *Router, pattern: string, handler_id: int) -> int {
+    return router_add_route(r, "OPTIONS", pattern, handler_id);
+}
+
+fn router_use_cors(r: *Router, origin: string, methods: string, headers: string) {
+    r.cors_enabled = 1;
+    r.cors_origin = origin;
+    r.cors_methods = methods;
+    r.cors_headers = headers;
+}
+
+fn router_use_auth(r: *Router, header_name: string, expected_token: string) {
+    r.auth_enabled = 1;
+    r.auth_header = header_name;
+    r.auth_token = expected_token;
+}
+
+fn router_use_logging(r: *Router) {
+    r.logging_enabled = 1;
+}
+
+fn router_get_logs(r: *Router) -> string {
+    return r.log_buffer;
+}
+
+fn router_get_log_count(r: *Router) -> int {
+    return r.log_count;
+}
+
+fn router_find_route(r: *Router, method: string, path: string, out_params: *string, out_handler_id: *int) -> int {
+    var path_matched_other_method: int = 0;
+    var i: int = 0;
+    while (i < r.route_count) {
+        var params: string = "";
+        if (router_match_path(r.routes[i].pattern, path, &params) != 0) {
+            if (text_cmp(r.routes[i].method, method) == 0) {
+                *out_params = params;
+                *out_handler_id = r.routes[i].handler_id;
+                return 1;
+            } else {
+                path_matched_other_method = 1;
+            }
+        }
+        i = i + 1;
+    }
+    if (path_matched_other_method != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+fn router_dispatch(r: *Router, req: Request) -> Response {
+    if (r.logging_enabled != 0) {
+        r.log_buffer = r.log_buffer + req.method + " " + req.path + "\n";
+        r.log_count = r.log_count + 1;
+    }
+
+    if (r.cors_enabled != 0 && text_cmp(req.method, "OPTIONS") == 0) {
+        var preflight: Response = response_no_content();
+        preflight = response_with_header(preflight, "Access-Control-Allow-Origin", r.cors_origin);
+        preflight = response_with_header(preflight, "Access-Control-Allow-Methods", r.cors_methods);
+        preflight = response_with_header(preflight, "Access-Control-Allow-Headers", r.cors_headers);
+        return preflight;
+    }
+
+    if (r.auth_enabled != 0) {
+        let auth_val: string = request_get_header(req, r.auth_header);
+        if (text_cmp(auth_val, r.auth_token) != 0) {
+            var auth_res: Response = response_unauthorized("Invalid or missing authorization credentials");
+            if (r.cors_enabled != 0) {
+                auth_res = response_with_header(auth_res, "Access-Control-Allow-Origin", r.cors_origin);
+            }
+            return auth_res;
+        }
+    }
+
+    var params: string = "";
+    var handler_id: int = 0;
+    let match_res: int = router_find_route(r, req.method, req.path, &params, &handler_id);
+
+    if (match_res == 1) {
+        var body_str: string = "{\"handler_id\":" + text_from_int(handler_id);
+        if (text_len(params) > 0) {
+            body_str = body_str + ",\"params\":\"" + params + "\"";
+        }
+        body_str = body_str + "}";
+        var ok_res: Response = response_json(200, body_str);
+        if (r.cors_enabled != 0) {
+            ok_res = response_with_header(ok_res, "Access-Control-Allow-Origin", r.cors_origin);
+        }
+        return ok_res;
+    }
+
+    if (match_res == -1) {
+        var err405: Response = response_method_not_allowed();
+        if (r.cors_enabled != 0) {
+            err405 = response_with_header(err405, "Access-Control-Allow-Origin", r.cors_origin);
+        }
+        return err405;
+    }
+
+    var err404: Response = response_not_found("No matching route found for path: " + req.path);
+    if (r.cors_enabled != 0) {
+        err404 = response_with_header(err404, "Access-Control-Allow-Origin", r.cors_origin);
+    }
+    return err404;
+}

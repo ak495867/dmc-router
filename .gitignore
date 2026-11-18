@@ -1,0 +1,12 @@
+bin/
+build/
+dist/
+*.exe
+*.o
+*.a
+*.obj
+*.dll
+*.so
+*.dylib
+_test_tmp*
+.dmc_cache/

@@ -1,0 +1,13 @@
+[package]
+name = "dmc-router"
+version = "1.0.0"
+description = "High-Throughput HTTP REST API Router & Middleware Framework for Demonic C"
+author = "ak495867"
+license = "MIT"
+repository = "https://github.com/ak495867/dmc-router.git"
+
+[build]
+type = "lib"
+output = "lib/libdmc_router"
+
+[dependencies]

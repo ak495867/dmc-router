@@ -1,0 +1,288 @@
+import dmc_router;
+
+#[test]
+fn test_parametric_route_matching() -> int {
+    var p1: string = "";
+    let m1: int = router_match_path("/api/users/:id", "/api/users/42", &p1);
+    if (m1 != 1) {
+        return 1;
+    }
+    let id_val: string = router_param_get(p1, "id");
+    if (text_cmp(id_val, "42") != 0) {
+        return 2;
+    }
+
+    var p2: string = "";
+    let m2: int = router_match_path("/posts/:post_id/comments/:comment_id", "/posts/101/comments/456", &p2);
+    if (m2 != 1) {
+        return 3;
+    }
+    let post_id: string = router_param_get(p2, "post_id");
+    let comment_id: string = router_param_get(p2, "comment_id");
+    if (text_cmp(post_id, "101") != 0) {
+        return 4;
+    }
+    if (text_cmp(comment_id, "456") != 0) {
+        return 5;
+    }
+
+    var p3: string = "";
+    let m3: int = router_match_path("/posts/:post_id/comments/:comment_id", "/posts/101/comments", &p3);
+    if (m3 != 0) {
+        return 6;
+    }
+
+    var p4: string = "";
+    let m4: int = router_match_path("/api/users/:id", "/api/products/42", &p4);
+    if (m4 != 0) {
+        return 7;
+    }
+
+    return 0;
+}
+
+#[test]
+fn test_http_method_dispatch() -> int {
+    var r: Router = router_new();
+    router_get(&r, "/items", 10);
+    router_post(&r, "/items", 11);
+    router_put(&r, "/items/:id", 12);
+    router_delete(&r, "/items/:id", 13);
+    router_patch(&r, "/items/:id", 14);
+    router_options(&r, "/items", 15);
+
+    let req_get: Request = request_new("GET", "/items", "", "");
+    let res_get: Response = router_dispatch(&r, req_get);
+    if (res_get.status != 200) {
+        return 1;
+    }
+    if (text_contains(res_get.body, "10") == 0) {
+        return 2;
+    }
+
+    let req_post: Request = request_new("POST", "/items", "{\"name\":\"item1\"}", "");
+    let res_post: Response = router_dispatch(&r, req_post);
+    if (res_post.status != 200) {
+        return 3;
+    }
+    if (text_contains(res_post.body, "11") == 0) {
+        return 4;
+    }
+
+    let req_put: Request = request_new("PUT", "/items/55", "{\"name\":\"item55\"}", "");
+    let res_put: Response = router_dispatch(&r, req_put);
+    if (res_put.status != 200) {
+        return 5;
+    }
+    if (text_contains(res_put.body, "12") == 0) {
+        return 6;
+    }
+    if (text_contains(res_put.body, "id=55") == 0) {
+        return 7;
+    }
+
+    let req_del: Request = request_new("DELETE", "/items/55", "", "");
+    let res_del: Response = router_dispatch(&r, req_del);
+    if (res_del.status != 200) {
+        return 8;
+    }
+    if (text_contains(res_del.body, "13") == 0) {
+        return 9;
+    }
+
+    let req_patch: Request = request_new("PATCH", "/items/55", "{\"active\":true}", "");
+    let res_patch: Response = router_dispatch(&r, req_patch);
+    if (res_patch.status != 200) {
+        return 10;
+    }
+    if (text_contains(res_patch.body, "14") == 0) {
+        return 11;
+    }
+
+    let req_405: Request = request_new("POST", "/items/55", "", "");
+    let res_405: Response = router_dispatch(&r, req_405);
+    if (res_405.status != 405) {
+        return 12;
+    }
+
+    let req_404: Request = request_new("GET", "/nonexistent", "", "");
+    let res_404: Response = router_dispatch(&r, req_404);
+    if (res_404.status != 404) {
+        return 13;
+    }
+
+    return 0;
+}
+
+#[test]
+fn test_query_string_parser() -> int {
+    let parsed: string = router_parse_query("?q=term&page=2");
+    if (text_cmp(parsed, "q=term&page=2") != 0) {
+        return 1;
+    }
+
+    let val_q: string = router_query_get("?q=term&page=2", "q");
+    if (text_cmp(val_q, "term") != 0) {
+        return 2;
+    }
+
+    let val_page: string = router_query_get("?q=term&page=2", "page");
+    if (text_cmp(val_page, "2") != 0) {
+        return 3;
+    }
+
+    let val_missing: string = router_query_get("?q=term&page=2", "missing");
+    if (text_len(val_missing) != 0) {
+        return 4;
+    }
+
+    let req: Request = request_new("GET", "/search?filter=active&limit=10", "", "");
+    if (text_cmp(req.path, "/search") != 0) {
+        return 5;
+    }
+    if (text_cmp(req.query, "filter=active&limit=10") != 0) {
+        return 6;
+    }
+    let filter_val: string = request_get_query(req, "filter");
+    if (text_cmp(filter_val, "active") != 0) {
+        return 7;
+    }
+    let limit_val: string = request_get_query(req, "limit");
+    if (text_cmp(limit_val, "10") != 0) {
+        return 8;
+    }
+
+    return 0;
+}
+
+#[test]
+fn test_middleware_cors() -> int {
+    var r: Router = router_new();
+    router_use_cors(&r, "*", "GET,POST,OPTIONS", "Content-Type,Authorization");
+    router_get(&r, "/api/data", 1);
+
+    let req_options: Request = request_new("OPTIONS", "/api/data", "", "");
+    let res_options: Response = router_dispatch(&r, req_options);
+    if (res_options.status != 204) {
+        return 1;
+    }
+    if (text_contains(res_options.headers, "Access-Control-Allow-Origin: *") == 0) {
+        return 2;
+    }
+    if (text_contains(res_options.headers, "Access-Control-Allow-Methods: GET,POST,OPTIONS") == 0) {
+        return 3;
+    }
+
+    let req_get: Request = request_new("GET", "/api/data", "", "");
+    let res_get: Response = router_dispatch(&r, req_get);
+    if (res_get.status != 200) {
+        return 4;
+    }
+    if (text_contains(res_get.headers, "Access-Control-Allow-Origin: *") == 0) {
+        return 5;
+    }
+
+    return 0;
+}
+
+#[test]
+fn test_middleware_auth_check() -> int {
+    var r: Router = router_new();
+    router_use_auth(&r, "Authorization", "Bearer secret123");
+    router_get(&r, "/protected", 42);
+
+    let req_no_auth: Request = request_new("GET", "/protected", "", "");
+    let res_no_auth: Response = router_dispatch(&r, req_no_auth);
+    if (res_no_auth.status != 401) {
+        return 1;
+    }
+
+    let req_wrong_auth: Request = request_new("GET", "/protected", "", "Authorization: Bearer wrong\r\n");
+    let res_wrong_auth: Response = router_dispatch(&r, req_wrong_auth);
+    if (res_wrong_auth.status != 401) {
+        return 2;
+    }
+
+    let req_ok_auth: Request = request_new("GET", "/protected", "", "Authorization: Bearer secret123\r\n");
+    let res_ok_auth: Response = router_dispatch(&r, req_ok_auth);
+    if (res_ok_auth.status != 200) {
+        return 3;
+    }
+
+    return 0;
+}
+
+#[test]
+fn test_middleware_logging_hook() -> int {
+    var r: Router = router_new();
+    router_use_logging(&r);
+    router_get(&r, "/users", 1);
+    router_post(&r, "/users", 2);
+
+    let req1: Request = request_new("GET", "/users", "", "");
+    router_dispatch(&r, req1);
+
+    let req2: Request = request_new("POST", "/users", "{}", "");
+    router_dispatch(&r, req2);
+
+    if (router_get_log_count(&r) != 2) {
+        return 1;
+    }
+    let logs: string = router_get_logs(&r);
+    if (text_contains(logs, "GET /users") == 0) {
+        return 2;
+    }
+    if (text_contains(logs, "POST /users") == 0) {
+        return 3;
+    }
+
+    return 0;
+}
+
+#[test]
+fn test_json_and_response_formatters() -> int {
+    let json_stat: string = router_json_status(200, 1, "Success");
+    if (text_contains(json_stat, "\"status\":200") == 0) {
+        return 1;
+    }
+    if (text_contains(json_stat, "\"ok\":true") == 0) {
+        return 2;
+    }
+
+    let json_o2: string = router_json_obj2("id", "42", "role", "admin");
+    if (text_contains(json_o2, "\"id\":\"42\"") == 0) {
+        return 3;
+    }
+    if (text_contains(json_o2, "\"role\":\"admin\"") == 0) {
+        return 4;
+    }
+
+    let res_ok: Response = response_ok("Hello World");
+    if (res_ok.status != 200) {
+        return 5;
+    }
+
+    let res_created: Response = response_created("{\"id\":100}");
+    if (res_created.status != 201) {
+        return 6;
+    }
+
+    let res_bad: Response = response_bad_request("invalid id");
+    if (res_bad.status != 400) {
+        return 7;
+    }
+
+    let res_wire: Response = response_json(200, "{\"success\":true}");
+    let wire_str: string = response_serialize(res_wire);
+    if (text_contains(wire_str, "HTTP/1.1 200 OK\r\n") == 0) {
+        return 8;
+    }
+    if (text_contains(wire_str, "Content-Type: application/json\r\n") == 0) {
+        return 9;
+    }
+    if (text_contains(wire_str, "{\"success\":true}") == 0) {
+        return 10;
+    }
+
+    return 0;
+}
